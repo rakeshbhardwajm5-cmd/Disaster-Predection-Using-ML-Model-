@@ -1,0 +1,128 @@
+import time
+from pathlib import Path
+
+import joblib
+import pandas as pd
+import serial
+
+# ==========================================
+# 1. CONFIGURATION
+# ==========================================
+
+FOLDER = Path(__file__).parent
+MODEL_PATH = FOLDER / "C:\\Users\\Rakesh Bharadwaj\\OneDrive\\Apps\\Broo\\temperature_humidity_model.pkl"
+
+PORT = "COM8"       # Change to your actual Arduino COM port
+BAUD_RATE = 9600
+
+# ==========================================
+# 2. LOAD THE TRAINED ML MODEL
+# ==========================================
+
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(
+        f"Model file not found: {MODEL_PATH}\n"
+        "Download temperature_humidity_model.pkl "
+        "from Colab and put it beside this Python file."
+    )
+
+model = joblib.load(MODEL_PATH)
+
+required_features = [
+    "temperature_c",
+    "relative_humidity_pct"
+]
+
+if list(model.feature_names_in_) != required_features:
+    raise ValueError(
+        "Unexpected model input features: "
+        f"{list(model.feature_names_in_)}"
+    )
+
+print("Trained ML model loaded successfully!")
+print("Model classes:", list(model.classes_))
+print("Connecting to Arduino...")
+
+# ==========================================
+# 3. CONNECT TO ARDUINO
+# ==========================================
+
+try:
+    with serial.Serial(PORT, BAUD_RATE, timeout=3) as ser:
+        time.sleep(2)
+
+        print(f"Arduino connected on {PORT}")
+        print("Live ML prediction started.")
+        print("Press Ctrl+C to stop.\n")
+
+        # ==================================
+        # 4. READ LIVE SENSOR DATA
+        # Arduino sends: temperature,humidity
+        # Example: 29.40,60.00
+        # ==================================
+
+        while True:
+            line = ser.readline().decode(
+                "utf-8", errors="ignore"
+            ).strip()
+
+            if not line:
+                continue
+
+            parts = line.split(",")
+
+            if len(parts) != 2:
+                continue
+
+            try:
+                temperature = float(parts[0])
+                humidity = float(parts[1])
+            except ValueError:
+                continue
+
+            if not -50 <= temperature <= 80:
+                print("Invalid temperature:", temperature)
+                continue
+
+            if not 0 <= humidity <= 100:
+                print("Invalid humidity:", humidity)
+                continue
+
+            # ==================================
+            # 5. PREPARE MODEL INPUT
+            # Feature names and order must match
+            # the model used during training.
+            # ==================================
+
+            sample = pd.DataFrame({
+                "temperature_c": [temperature],
+                "relative_humidity_pct": [humidity]
+            })
+
+            # ==================================
+            # 6. MAKE LIVE ML PREDICTION
+            # ==================================
+
+            prediction = model.predict(sample)[0]
+
+            print("=" * 45)
+            print(f"Temperature: {temperature:.2f} °C")
+            print(f"Humidity:    {humidity:.2f}%")
+            print(f"ML prediction: {prediction}")
+
+            if hasattr(model, "predict_proba"):
+                probabilities = model.predict_proba(sample)[0]
+
+                print("Model class probabilities:")
+                for label, probability in zip(
+                    model.classes_, probabilities
+                ):
+                    print(f"  {label}: {probability * 100:.1f}%")
+
+            print("=" * 45)
+
+except serial.SerialException as error:
+    print("Arduino serial connection error:", error)
+
+except KeyboardInterrupt:
+    print("\nLive ML prediction stopped.")
