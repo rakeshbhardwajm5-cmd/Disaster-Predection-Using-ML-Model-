@@ -1,0 +1,149 @@
+# ============================================
+# TEMPERATURE + HUMIDITY ML TRAINING
+# Google Colab - Complete corrected program
+# ============================================
+
+from pathlib import Path
+import pandas as pd
+import joblib
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+
+# 1. Find your uploaded dataset
+possible_files = [
+    Path("/content/sample_data/temperature_humidity_training_data.Csv"),
+
+]
+
+DATA_PATH = next(
+    (p for p in possible_files if p.exists()),
+    None
+)
+
+if DATA_PATH is None:
+    print("Dataset not found. Files currently in /content:")
+    for p in Path("/content").rglob("*"):
+        if p.is_file():
+            print(p)
+    raise FileNotFoundError(
+        "Upload the temperature_humidity_training_data file "
+        "and update the path using the printed file list."
+    )
+
+print("Found dataset:", DATA_PATH)
+
+# 2. Identify the REAL file format
+with open(DATA_PATH, "rb") as f:
+    signature = f.read(8)
+
+# Excel .xlsx files are ZIP containers, usually starting with PK
+if signature.startswith(b"PK"):
+    data = pd.read_excel(DATA_PATH, engine="openpyxl")
+    print("Detected Excel format.")
+
+else:
+    # Read a real text CSV using common encodings
+    data = None
+    for encoding in ("utf-8-sig", "cp1252", "latin1"):
+        try:
+            data = pd.read_csv(DATA_PATH, encoding=encoding)
+            print("Detected text CSV; encoding:", encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if data is None:
+        raise ValueError("Could not decode this dataset as a text CSV.")
+
+# 3. Verify required columns
+data.columns = data.columns.astype(str).str.strip()
+
+features = ["temperature_c", "relative_humidity_pct"]
+target = "overall_status"
+
+required = features + [target]
+missing = [c for c in required if c not in data.columns]
+
+if missing:
+    print("Columns found:", list(data.columns))
+    raise ValueError(
+        f"Required columns missing: {missing}. "
+        "Make sure you loaded the training-data sheet, not README."
+    )
+
+# 4. Clean and validate the data
+for column in features:
+    data[column] = pd.to_numeric(data[column], errors="coerce")
+
+data[target] = data[target].astype("string").str.strip().str.upper()
+data = data.dropna(subset=required).copy()
+
+data = data[
+    data["relative_humidity_pct"].between(0, 100)
+    & data["temperature_c"].between(-50, 80)
+]
+
+if len(data) < 10:
+    raise ValueError(
+        f"Only {len(data)} valid rows found. Check the dataset."
+    )
+
+X = data[features]
+y = data[target].astype(str)
+
+if y.nunique() < 2 or y.value_counts().min() < 2:
+    raise ValueError(
+        "Need at least two categories, with at least two rows per category."
+    )
+
+print("\nDataset loaded successfully!")
+print("Valid records:", len(data))
+print("\nCategory counts:")
+print(y.value_counts())
+
+# 5. Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+# 6. Train the Random Forest model
+model = RandomForestClassifier(
+    n_estimators=200,
+    min_samples_leaf=2,
+    class_weight="balanced",
+    random_state=42
+)
+
+model.fit(X_train, y_train)
+
+# 7. Evaluate the model on held-out rows
+predictions = model.predict(X_test)
+
+print("\nTest accuracy:",
+      round(accuracy_score(y_test, predictions) * 100, 2), "%")
+
+print("\nClassification report:")
+print(classification_report(
+    y_test, predictions, zero_division=0
+))
+
+# 8. Save the trained model
+MODEL_PATH = Path("/content/temperature_humidity_model.pkl")
+joblib.dump(model, MODEL_PATH)
+
+print("\n====================================")
+print("TRAINING COMPLETED")
+print("Model saved to:", MODEL_PATH)
+print("Input features:", list(model.feature_names_in_))
+print("Classes:", list(model.classes_))
+print("====================================")
+
+# 9. Download the trained model to your laptop
+from google.colab import files
+files.download(str(MODEL_PATH))
